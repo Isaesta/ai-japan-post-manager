@@ -63,12 +63,20 @@ for key in [
     "edit_mode",
     "confirm_update",
     "confirm_delete",
+    "visibility_update",
+    "visibility_updated"
 ]:
     if key not in st.session_state:
         st.session_state[key] = False
 
 if "deleted_title" not in st.session_state:
     st.session_state["deleted_title"] = ""
+
+if "visibility_post_id" not in st.session_state:
+    st.session_state["visibility_post_id"] = None
+
+if "visibility_new_value" not in st.session_state:
+    st.session_state["visibility_new_value"] = None
 
 # メモファイルのパス
 MEMO_FILE = Path("data/post_memo.txt")
@@ -101,7 +109,8 @@ with psycopg.connect(
                 p.content,
                 p.image_path,
                 p.post_count,
-                MAX(h.posted_at) AS last_posted
+                MAX(h.posted_at) AS last_posted,
+                p.hidden_flag
             FROM posts p
             LEFT JOIN post_history h
                 ON p.id = h.post_id
@@ -111,15 +120,16 @@ with psycopg.connect(
                 p.category,
                 p.content,
                 p.image_path,
-                p.post_count
-            ORDER BY p.id;
+                p.post_count,
+                p.hidden_flag
+            ORDER BY p.id DESC;
         """)
         rows = cur.fetchall()
 
 # DataFrameに変換
 df = pd.DataFrame(
     rows,
-    columns=["ID", "タイトル", "カテゴリ", "本文", "画像パス", "投稿回数", "最終投稿日"]
+    columns=["ID", "タイトル", "カテゴリ", "本文", "画像パス", "投稿回数", "最終投稿日", "非表示フラグ"]
 )
 
 # # ID非表示(必要に応じて)
@@ -174,7 +184,7 @@ with col1:
     st.subheader("📋 投稿一覧")
 
     # 絞り込みとソートのUIを横並びで表示
-    filter_category_col, filter_status_col, filter_repost_col, filter_sort_col = st.columns(4)
+    filter_category_col, filter_status_col, filter_repost_col, filter_sort_col, filter_hidden_col = st.columns(5)
 
     # カテゴリ絞り込みのUI
     with filter_category_col:
@@ -209,17 +219,28 @@ with col1:
                 "60日以上経過"
             ]
         )
-    
+
     # ソートオプションのUI
     with filter_sort_col:
         sort_option = st.selectbox(
             f"**ソート**",
             [
-                "ID順",
+                "新規投稿が新しい順",
                 "投稿回数が少ない順",
                 "投稿回数が多い順",
                 "最終投稿日が古い順",
                 "最終投稿日が新しい順"
+            ]
+        )
+    
+    # 表示状態絞り込みのUI
+    with filter_hidden_col:
+        hidden_filter = st.selectbox(
+            f"**表示状態フラグ**",
+            [
+                "表示中のみ",
+                "非表示のみ",
+                "すべて"
             ]
         )
 
@@ -288,10 +309,17 @@ with col1:
     else:
         df = df.sort_values(
             by="ID",
-            ascending=True
+            ascending=False
         )
 
     df = df.reset_index(drop=True)
+
+    # 表示状態絞り込み処理
+    if hidden_filter == "表示中のみ":
+        df = df[df["非表示フラグ"] == False].reset_index(drop=True)
+    
+    elif hidden_filter == "非表示のみ":
+        df = df[df["非表示フラグ"] == True].reset_index(drop=True)
 
     # キーワード検索
     search_text = st.text_input(f"**キーワード検索**")
@@ -481,15 +509,32 @@ with col2:
             else:
                 st.write("履歴なし")
         
-        # 編集ボタンと削除ボタン
-        edit_button_col, delete_button_col = st.columns(2)
+        # 編集ボタンと非表示ボタン、削除ボタン
+        edit_button_col, hide_button_col, delete_button_col = st.columns(3)
 
+        # 編集モードへの切り替え
         with edit_button_col:
             if st.button("編集する"):
                 st.session_state["edit_mode"] = True
                 st.session_state["confirm_update"] = False
                 st.rerun()
 
+        # 非表示フラグの更新
+        with hide_button_col:
+            if selected_row["非表示フラグ"]:
+                visibility_button_label = "再表示する"
+                target_hidden_flag = False
+            else:
+                visibility_button_label = "非表示にする"
+                target_hidden_flag = True
+
+            if st.button(visibility_button_label):
+                st.session_state["visibility_update"] = True
+                st.session_state["visibility_post_id"] = selected_post_id
+                st.session_state["visibility_new_value"] = target_hidden_flag
+                st.rerun()
+
+        # 削除ボタン
         with delete_button_col:
             if st.button("削除する"):
                 st.session_state["confirm_delete"] = True
@@ -589,6 +634,36 @@ with col2:
                         st.session_state["confirm_update"] = False
                         st.rerun()
 
+        # 非表示・再表示の更新処理
+        if st.session_state.get("visibility_update"):
+
+            with psycopg.connect(
+                host=os.getenv("DB_HOST"),
+                port=os.getenv("DB_PORT"),
+                dbname=os.getenv("DB_NAME"),
+                user=os.getenv("DB_USER"),
+                password=os.getenv("DB_PASSWORD"),
+            ) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE posts
+                        SET hidden_flag = %s
+                        WHERE id = %s;
+                        """,
+                        (
+                            st.session_state["visibility_new_value"],
+                            st.session_state["visibility_post_id"],
+                        )
+                    )
+
+            st.session_state["visibility_update"] = False
+            st.session_state["visibility_post_id"] = None
+            st.session_state["visibility_new_value"] = None
+            st.session_state["visibility_updated"] = True
+
+            st.rerun()
+
         # 削除処理
         if st.session_state.get("confirm_delete"):
 
@@ -647,6 +722,11 @@ with col2:
         if st.session_state.get("updated"):
             st.info("投稿が更新されました")
             st.session_state["updated"] = False
+        
+        # 表示状態更新完了メッセージ
+        if st.session_state.get("visibility_updated"):
+            st.info("表示状態を更新しました")
+            st.session_state["visibility_updated"] = False
         
         # 削除完了メッセージ
         if st.session_state.get("deleted"):
