@@ -16,6 +16,40 @@ st.set_page_config(
 
 load_dotenv()
 
+# GPTsのURLを取得
+GPT_LINKS = {
+    "善意あるAI社会シリーズ：": [
+        ("🎬 シナリオライター", os.getenv("GPT_SCENARIO_WRITER")),
+        ("📝 エディター", os.getenv("GPT_EDITOR")),
+        ("🎨 クリエイター", os.getenv("GPT_CREATOR")),
+        ("👓 リーダー", os.getenv("GPT_LEADER")),
+        ("🐦 X投稿アシスタント", os.getenv("GPT_X_ASSIST")),
+        ("📒 noteアシスタント", os.getenv("GPT_NOTE_ASSIST")),
+    ],
+    "AIと日本人シリーズ：": [
+        ("✍️ 投稿文アシスタント", os.getenv("GPT_AIJP_POST")),
+        ("🖼️ 画像アシスタント", os.getenv("GPT_AIJP_IMAGE")),
+    ]
+}
+
+# GPTsリンクの表示
+def render_gpt_links():
+    st.subheader("🧠 GPTsリンク")
+
+    for group_name, links in GPT_LINKS.items():
+        st.markdown(f"**{group_name}**")
+
+        cols = st.columns(6)
+
+        for i, (name, url) in enumerate(links):
+
+            with cols[i % 6]:
+                st.link_button(
+                    name,
+                    url,
+                    use_container_width=True
+                )
+
 # 画像保存用ディレクトリの作成
 IMAGE_DIR = Path("images")
 IMAGE_DIR.mkdir(exist_ok=True)
@@ -35,6 +69,20 @@ for key in [
 
 if "deleted_title" not in st.session_state:
     st.session_state["deleted_title"] = ""
+
+# メモファイルのパス
+MEMO_FILE = Path("data/post_memo.txt")
+MEMO_FILE.parent.mkdir(exist_ok=True)
+
+# メモの読み込み
+def load_memo():
+    if MEMO_FILE.exists():
+        return MEMO_FILE.read_text(encoding="utf-8")
+    return ""
+
+# メモの保存
+def save_memo(text):
+    MEMO_FILE.write_text(text, encoding="utf-8")
 
 # データベースから投稿データを取得
 with psycopg.connect(
@@ -123,7 +171,7 @@ col1, col2 = st.columns([2, 1])
 
 # 左カラム：投稿一覧の表示
 with col1:
-    st.subheader("投稿一覧")
+    st.subheader("📋 投稿一覧")
 
     # 絞り込みとソートのUIを横並びで表示
     filter_category_col, filter_status_col, filter_repost_col, filter_sort_col = st.columns(4)
@@ -279,7 +327,7 @@ with col1:
         df = df[mask].reset_index(drop=True)
 
     list_df = df[
-        ["カテゴリ", "本文", "投稿回数", "最終投稿日"]
+        ["タイトル", "カテゴリ", "本文", "投稿回数", "最終投稿日"]
     ]
 
     event = st.dataframe(
@@ -291,11 +339,17 @@ with col1:
         selection_mode="single-row"
     )
 
+    # GPTsリンクの表示
+    st.divider()
+    render_gpt_links()
+
 # 右カラム：投稿詳細の表示
 with col2:
-    st.subheader("投稿詳細")
+    st.subheader("📖 投稿詳細")
 
-    if event.selection.rows:
+    selected = bool(event.selection.rows)
+
+    if selected:
         selected_index = event.selection.rows[0]
         selected_row = df.iloc[selected_index]
 
@@ -601,103 +655,120 @@ with col2:
             st.session_state["deleted_title"] = ""
 
     else:
-        st.info("左の一覧から投稿を選択してください")
+        st.info("投稿詳細を確認するには一覧から選択してください")
+    
+        # 新規投稿フォーム
+        st.subheader("✏️ 新規投稿")
 
+        title = st.text_input(f"**タイトル：**")
 
-# 新規投稿フォーム
-st.subheader("新規投稿")
+        category = st.selectbox(
+            f"**カテゴリ：**",
+            [
+                "4コマ投稿",
+                "AIと空気",
+                "日常観察"
+            ]
+        )
 
-title = st.text_input(f"**タイトル：**")
+        content = st.text_area(
+            f"**本文：**",
+            height=300
+        )
 
-category = st.selectbox(
-    f"**カテゴリ：**",
-    [
-        "4コマ投稿",
-        "AIと空気",
-        "日常観察"
-    ]
-)
+        uploaded_file = st.file_uploader(
+            f"**画像ファイル：**",
+            type=["png", "jpg", "jpeg", "webp"]
+        )
 
-content = st.text_area(
-    f"**本文：**",
-    height=300
-)
+        image_path = ""
 
-uploaded_file = st.file_uploader(
-    f"**画像ファイル：**",
-    type=["png", "jpg", "jpeg", "webp"]
-)
+        if uploaded_file is not None:
+            image_path = uploaded_file.name
+            st.write(f"**ファイルパス：** {image_path}")
 
-image_path = ""
+        # 登録ボタンクリック後にSQLを更新し、画面の再実行を行う
+        if st.button("登録"):
+            with psycopg.connect(
+                host=os.getenv("DB_HOST"),
+                port=os.getenv("DB_PORT"),
+                dbname=os.getenv("DB_NAME"),
+                user=os.getenv("DB_USER"),
+                password=os.getenv("DB_PASSWORD"),
+            ) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO posts (
+                            title,
+                            category,
+                            content,
+                            image_path
+                        )
+                        VALUES (%s, %s, %s, %s)
+                        RETURNING id;
+                        """,
+                        (
+                            title,
+                            category,
+                            content,
+                            None
+                        )
+                    )
 
-if uploaded_file is not None:
-    image_path = uploaded_file.name
-    st.write(f"**ファイルパス：** {image_path}")
+                    new_post_id = cur.fetchone()[0]
 
-# 登録ボタンクリック後にSQLを更新し、画面の再実行を行う
-if st.button("登録"):
-    with psycopg.connect(
-        host=os.getenv("DB_HOST"),
-        port=os.getenv("DB_PORT"),
-        dbname=os.getenv("DB_NAME"),
-        user=os.getenv("DB_USER"),
-        password=os.getenv("DB_PASSWORD"),
-    ) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO posts (
-                    title,
-                    category,
-                    content,
-                    image_path
-                )
-                VALUES (%s, %s, %s, %s)
-                RETURNING id;
-                """,
-                (
-                    title,
-                    category,
-                    content,
-                    None
-                )
-            )
+                    image_path = None
 
-            new_post_id = cur.fetchone()[0]
+                    if uploaded_file is not None:
+                        save_path = IMAGE_DIR / f"{new_post_id:06d}.jpg"
 
-            image_path = None
+                        image = Image.open(uploaded_file)
+                        image = image.convert("RGB")
 
-            if uploaded_file is not None:
-                save_path = IMAGE_DIR / f"{new_post_id:06d}.jpg"
+                        image.save(
+                            save_path,
+                            "JPEG",
+                            quality=95,
+                            optimize=True
+                        )
 
-                image = Image.open(uploaded_file)
-                image = image.convert("RGB")
+                        image_path = str(save_path)
+                    
+                    cur.execute(
+                        """
+                        UPDATE posts
+                        SET image_path = %s
+                        WHERE id = %s;
+                        """,
+                        (
+                            image_path,
+                            new_post_id
+                        )
+                    )
 
-                image.save(
-                    save_path,
-                    "JPEG",
-                    quality=95,
-                    optimize=True
-                )
+            st.session_state["saved"] = True
+            st.rerun()
 
-                image_path = str(save_path)
-            
-            cur.execute(
-                """
-                UPDATE posts
-                SET image_path = %s
-                WHERE id = %s;
-                """,
-                (
-                    image_path,
-                    new_post_id
-                )
-            )
+        if st.session_state.get("saved"):
+            st.info("投稿が登録されました")
+            st.session_state["saved"] = False
+    
+    # メモ機能
+    st.subheader("📝 メモ")
 
-    st.session_state["saved"] = True
-    st.rerun()
+    # 初回表示時だけファイルから読み込み
+    if "memo_text" not in st.session_state:
+        st.session_state.memo_text = load_memo()
 
-if st.session_state.get("saved"):
-    st.info("投稿が登録されました")
-    st.session_state["saved"] = False
+    memo_text = st.text_area(
+        "メモ書き",
+        value=st.session_state.memo_text,
+        height=600,
+        key="memo_text"
+    )
+
+    if st.button("💾 メモを保存"):
+        save_memo(st.session_state.memo_text)
+        st.success("メモを保存しました")
 
