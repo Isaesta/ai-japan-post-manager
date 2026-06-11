@@ -461,9 +461,10 @@ with col2:
             image_path = selected_row["画像パス"]
 
             if pd.isna(image_path) or image_path == "":
-                st.write(f"**画像パス：** 未設定")
+                st.write(f"**🖼️ X投稿用画像パス：** 未設定")
             else:
-                st.write(f"**画像パス：** {image_path}")
+                abs_path = str(Path(image_path).resolve())
+                st.write(f"**🖼️ X投稿用画像パス：** {abs_path}")
                 st.image(image_path)
 
             # 投稿回数の表示
